@@ -3,6 +3,7 @@ from sqlalchemy.exc import ProgrammingError
 from pymysql.err import InternalError, OperationalError
 import sys, os
 import pandas as pd
+pd.options.mode.chained_assignment = None  # default='warn'
 import numpy as np
 
 from datetime import datetime as dt
@@ -14,50 +15,104 @@ import mwviews
 from multiprocessing import Pool
     
 from time import sleep
+import random
 import json
 import click
 
+import warnings
 
 
+def wmftimestamp(bytestring):
+    s = bytestring.decode('utf-8')
+    return dt.strptime(s, '%Y%m%d%H%M%S')
+
+def decode_or_nouser(b):
+    if isinstance(b, bytes):
+        return b.decode('utf-8') if b else '#nosuchuser'
+    else:
+        return b
+
+##Functions to get a retrieve user histories because SQL to slow and
+## data too large to do it on SQL server.
+
+datadir = ''
+db_prefix = ''
+userhistlist = ''
+con = None
+
+def proc_user(user_id):
+#     print('doing {}'.format(user_id))
+    # check that a user id was able to be found
+    if user_id >= 0:
+    #     print('working on {}'.format(user))
+        pickle_filename = '{}.pickle'.format(user_id)
+        if not pickle_filename in userhistlist:
+            sql = f'''
+            select rev_timestamp from {db_prefix}.revision r
+            where rev_user = {user_id}'''
+            #print(rev_user_sql)
+            MAXRETRIES = 4
+            retries = 0
+            while (retries < MAXRETRIES):
+                sleep(retries**2)
+                sleep(random.random()) #sleep a random amount to help with multiprocessing
+                try:
+                    df = pd.read_sql(sql, con)
+                    df['rev_timestamp'] = df['rev_timestamp'].apply(wmftimestamp)
+                    print('{} df has length {}'.format(user_id, len(df)))
+                    pickle_path = os.path.join(datadir, 'user_histories', pickle_filename)
+                    df.to_pickle(pickle_path)
+                    return True
+                except Exception as e:
+                    print(e)
+                    retries += 1
+            return False
+
+        
+        
+        else:
+            print('we already did: {}'.format(user_id))
+            pass
+    #this corresontp
+    else:
+        print('user id less than 0')
+        pass
 
 
-@click.command()
-@click.option('--conf', default='test',
-              help='the json file to look for in configs without `.json`')
-def main():
-    thank_love = 'love'
-
+def make_lang(langcode, love_thank, test_run=False):
+    
+    # i hate using globals, but because of multiprocess headaches this might be simple
+    global datadir
     datadir = os.path.join('data', langcode)
-
+    global db_prefix
     db_prefix = '{}wiki_p'.format(langcode)
-
+    
+    # test if we're already done.  
+    outputdir = os.path.join(datadir, 'outputs')
+    os.makedirs(outputdir, exist_ok=True)
+    todaystr = dt.today().strftime('%Y%m%d')
+    outfilestart = f'wiki{love_thank}_{langcode}'
+    outfilecompl = f'{outfilestart}_{todaystr}.csv'
+    outfile =  os.path.join(outputdir, outfilecompl)
+    outputlist = os.listdir(outputdir)
+    print(f'outfilestart is {outfilestart}.  output dir list is: {outputdir}')
+    if outfilecompl in outputlist:
+        #we've already donet this recently enough
+        return True
+    
+    
     site = mwclient.Site(('https', f'{langcode}.wikipedia.org'), path = '/w/')
-
-
-
-
-
+ 
     os.makedirs(datadir, exist_ok=True)
 
     constr = 'mysql+pymysql://{user}:{pwd}@{host}/DB?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
                                                           pwd=os.environ['MYSQL_PASSWORD'],
                                                           host=os.environ['MYSQL_HOST'])
+    global con
     con = create_engine(constr, encoding='utf-8')
 
-    con.execute(f'use {db_prefix}')
+#     con.execute(f'use {db_prefix};')
 
-    def wmftimestamp(bytestring):
-        s = bytestring.decode('utf-8')
-        return dt.strptime(s, '%Y%m%d%H%M%S')
-
-    def decode_or_nouser(b):
-        return b.decode('utf-8') if b else '#nosuchuser'
-
-
-    # In[46]:
-
-
-    #all_thanks_sql = f"select log_timestamp, log_title, log_user_text from logging where log_type = 'thanks'"
     thanks_sql = f"""select timestamp,
             receiver, 
             ru.user_id as receiver_id,
@@ -75,36 +130,31 @@ def main():
     wll_sender as sender, 
     wll_sender as sender_id,
     wll_type
-    from eswiki_p.wikilove_log"""
+    from {db_prefix}.wikilove_log"""
+    
+    which_sql_dict = {'thank':thanks_sql,
+                       'love':love_sql}
+    
+    which_sql = which_sql_dict[love_thank]
 
-    thank_df = pd.read_sql(thanks_sql, con)
+    thank_df = pd.read_sql(which_sql, con)
 
-    #thank_df = thank_df.rename(mapper=mapper, axis='columns')
 
     thank_df['receiver'] = thank_df['receiver'].apply(decode_or_nouser)
     thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
     thank_df['timestamp'] = thank_df['timestamp'].apply(wmftimestamp)
+    
+    print('#####')
+    print(f'love_thank is {love_thank}')
+    print(thank_df.head())
+
+    ## Shorten the dataframe if we're testing
+    if test_run:
+        thank_df_full = thank_df
+        thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
 
 
-    # In[48]:
-
-
-    love_df = pd.read_sql(love_sql, con)
-
-
-    # ### note on thank sizes
-    # #### june 2018
-    # + enwiki has 1.5m thanks ~130megs
-    # + plwiki has 81k thanks ~2.5meg
-
-    # ### user id for each user
-    # find na names. try and resolve them
-    # 
-    # create a many-to-one map where key is name, value is id
-    # 
-    # then do an apply
-
-    # In[6]:
+    ## Get changed name ids
 
 
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
@@ -135,13 +185,17 @@ def main():
         if len(rec_user_df) > 0:
             user_id = rec_user_df['receiver_id'].values[0]
             return user_id
-        else:
+        elif len(sen_user_df) >0:
             user_id = sen_user_df['sender_id'].values[0]
             return user_id
+        else:
+            #TODO
+            #we'd have to go make a seperate sql query for this 
+            return -1
 
     for direction in ['sender','receiver']:
         for oldname, newname in actual_moves.items():
-            user_id = get_id(newname)
+            user_id = get_id(oldname)
             print(f'going to replace {oldname} with {user_id}')
             thank_df.loc[thank_df[direction] == oldname, f'{direction}_id'] = user_id
 
@@ -151,51 +205,8 @@ def main():
     thank_df['sender_id'] = thank_df['sender_id'].fillna(-1).astype(int)
 
 
-    # In[8]:
 
 
-    len(user_ids)
-
-
-    # In[9]:
-
-
-    get_ipython().system('ls data/pl/user_histories/ | wc -l')
-
-
-    # In[11]:
-
-
-    def make_rev_sql(user_id):
-        sql= f'''
-        select rev_timestamp from {db_prefix}.revision r
-        where rev_user = {user_id}'''
-    #     print(sql)
-        return sql
-
-    def get_and_save_rev_history(strvar, sql_fn, ddir, pickle_filename):
-        sql = sql_fn(strvar)
-        #print(rev_user_sql)
-        MAXRETRIES = 5
-        retries = 0
-        while (retries < MAXRETRIES):
-            sleep(retries**2)
-
-            try:
-                df = pd.read_sql(sql, con)
-                df['rev_timestamp'] = df['rev_timestamp'].apply(wmftimestamp)
-                print('{} df has length {}'.format(strvar, len(df)))
-                pickle_path = os.path.join(ddir, pickle_filename)
-                df.to_pickle(pickle_path)
-            except ProgrammingError:
-                print(f"Couldnt execute: {sql}")
-                retries += 1
-            except InternalError:
-                print(f"internal error: {sql}")
-                retries += 1
-            except OperationalError:
-                print('probably lost connection')
-                retries += 1
 
     user_ids = set()
     user_ids.update(thank_df['receiver_id'].values)
@@ -205,81 +216,20 @@ def main():
     userhistdir = os.path.join(datadir,'user_histories')
     os.makedirs(userhistdir, exist_ok=True)
     print(f'using user history directory {userhistdir}')
+    global userhistlist
+    userhistlist = os.listdir(userhistdir)
 
-    def proc_user(user_id):
-    #     print('doing {}'.format(user_id))
-        # check that a user id was able to be found
-        if user_id >= 0:
-        #     print('working on {}'.format(user))
-            pickle_filename = '{}.pickle'.format(user_id)
-            existing_files = os.listdir(os.path.join(datadir, 'user_histories'))
-    #         print(f'there are already {len(existing_files)} existing files')
-            if not pickle_filename in existing_files:
-                get_and_save_rev_history(user_id, make_rev_sql, userhistdir, pickle_filename)
-            else:
-                #print('we already did: {}'.format(user))
-                pass
-        else:
-            #we couldn't find an id
-            pass
+    
+    #gymnastic to tryin to keep functional with the multiprocessing requiremnet that functions live in root namespace
+    user_ids_withdir = [(u, userhistlist, db_prefix, con) for u in user_ids]
 
-    with Pool(10) as p:
+    with Pool(4) as p:
         res = p.map_async(proc_user, user_ids)
         res.get()
 
     print('all done getting user history')
 
 
-    # In[7]:
-
-
-    # # for dir_type in ['user_histories','page_histories']:
-    # data_dir = 'data/user_histories/'
-    # ls = os.listdir(data_dir)
-    # pickles = [f for f in ls if f.endswith('.pickle')]
-    # for pickle in pickles:
-    #     fullpath = os.path.join(data_dir, pickle)
-    #     fastfile = fullpath+".fast"
-    #     if not os.path.isfile(fastfile):
-    #         df = pd.read_pickle(fullpath)
-    #         df['rev_timestamp'] = df['rev_timestamp'].apply(wmftimestamp)
-    #         df.to_pickle(fastfile)
-
-
-    # In[8]:
-
-
-    # data_dir = 'data/page_histories/'
-    # ls = os.listdir(data_dir)
-    # oldpicks = [f for f in ls if f.endswith('.pickle')]
-    # for pickle in oldpicks:
-    #     fullpath = os.path.join(data_dir, pickle)
-    #     fastfile = fullpath+".fast"
-    #     if not os.path.isfile(fastfile):
-    #         df = pd.read_pickle(os.path.join(data_dir, pickle))
-    #         df['rev_timestamp'] = df['rev_timestamp'].apply(wmftimestamp)
-    #         df['user_name'] = df['user_name'].apply(decode_or_nouser)
-    #         df.to_pickle(os.path.join(data_dir, '{}.fast'.format(pickle)))
-
-
-    # ## make revision features from pickles 
-    # ### number of previous edits
-    # + note users who are no longer in the database (maybe deleted or changed names) return value nan
-
-    # In[9]:
-
-
-    ## Checkpoint
-    # thank_df = pd.read_pickle('data/misc/thank_pl_2.pickle')
-
-
-    # In[10]:
-
-
-    # user_name_id_df = pd.read_pickle('data/misc/username_id_df_pl_2.pickle')
-
-
-    # In[15]:
 
 
     missing_users = set()
@@ -376,17 +326,6 @@ def main():
             return len(df[(tc1) & (tc2)])
 
 
-    # In[43]:
-
-
-    do_quick = True
-    if do_quick:
-        thank_df_full = thank_df
-        thank_df = thank_df_full[:1000]
-
-
-    # In[16]:
-
 
     thank_df['receiver_prev_received'] = thank_df.apply(lambda row: thank_another(user=row[1], role='receiver', timestamp=row[0], future=None), axis=1)
 
@@ -397,75 +336,36 @@ def main():
     thank_df['sender_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[3], role='sender', timestamp=row[0], future=None), axis=1)
 
 
-    # In[17]:
-
-
     conticols = ["receiver_prev_received","sender_prev_received","sender_prev_sent","receiver_prev_sent"]
     for col in conticols:
         indcol = "{col}_indicator".format(col=col)
         thank_df[indcol] = thank_df[col].apply(lambda x: x>0)
 
 
-    # In[19]:
-
-
-    len(thank_df)
-
-
-    # In[20]:
-
-
     thank_df['receiver_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1)
-
-
-    # In[21]:
-
-
     thank_df['sender_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[4], prior_to=row[0]), axis=1)
-
-
-    # In[22]:
-
 
     thank_df['sender_first_edit'] = thank_df['sender_id'].apply(first_edit)
     thank_df['receiver_first_edit'] = thank_df['receiver_id'].apply(first_edit)
 
 
-    # In[23]:
-
-
     thank_df['sender_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
-
-
-    # In[ ]:
-
-
     thank_df['sender_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=30), axis=1)
-
     thank_df['sender_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=90), axis=1)
     thank_df['sender_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=180), axis=1)
-
     thank_df['receiver_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=1), axis=1)
     thank_df['receiver_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=30), axis=1)
     thank_df['receiver_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=90), axis=1)
     thank_df['receiver_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=180), axis=1)
 
 
-    # In[25]:
-
-
     thank_df['receiver_thank_another_1d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=1), axis=1)
-
     thank_df['receiver_thank_another_30d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=30), axis=1)
-
     thank_df['receiver_thank_another_90d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=90), axis=1)
-
     thank_df['receiver_thank_another_180d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=180), axis=1)
 
 
-    # ## tests
-
-    # In[30]:
+    # TESTS
 
 
     def natural_integer_test(seq):
@@ -482,22 +382,17 @@ def main():
 
     most_sender = thank_df['sender'].value_counts().index[0]
 
-    most_sender_r = thank_df[thank_df['receiver']=='most_sender']
-    most_sender_s = thank_df[thank_df['sender']=='most_sender']
+    most_sender_r = thank_df[thank_df['receiver']==most_sender]
+    most_sender_s = thank_df[thank_df['sender']==most_sender]
     most_sender_rpr = most_sender_r['receiver_prev_received']
     most_sender_rps = most_sender_r['receiver_prev_sent']
     most_sender_sps = most_sender_s['sender_prev_sent']
     most_sender_spr = most_sender_s['sender_prev_received']
 
-    natural_integer_test(most_sender_rpr)
-    natural_integer_test(most_sender_sps)
+    #natural_integer_test(most_sender_rpr)
+    #natural_integer_test(most_sender_sps)
     monotonic(most_sender_spr)
     monotonic(most_sender_rps)
-
-
-    # ## Testing previous edits
-
-    # In[31]:
 
 
     for usercol, featcol in (('sender', 'sender_prev_edits'), ('receiver','receiver_prev_edits')):
@@ -507,88 +402,35 @@ def main():
     print('all clear')
 
 
-    # In[32]:
-
 
     for name, group in thank_df.groupby('sender'):
         assert len(group['sender_first_edit'].unique()) == 1
 
 
-    # ## previous and future edits on page
-
-    # In[ ]:
-
-
-    # thank_df['sender_prev_edits_on_page'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[2], page=row[3], timestamp=row[0], before_or_after='before'), axis=1)
-
-
-    # In[ ]:
-
-
-    # thank_df['receiver_prev_edits_on_page'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[1], page=row[3], timestamp=row[0], before_or_after='before'), axis=1)
-
-
-    # In[ ]:
-
-
-    # thank_df['sender_edits_on_page_1d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[2], page=row[3], timestamp=row[0], before_or_after=1), axis=1)
-    # thank_df['sender_edits_on_page_30d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[2], page=row[3], timestamp=row[0], before_or_after=30), axis=1)
-    # thank_df['sender_edits_on_page_90d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[2], page=row[3], timestamp=row[0], before_or_after=90), axis=1)
-    # thank_df['sender_edits_on_page_180d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[2], page=row[3], timestamp=row[0], before_or_after=180), axis=1)
-
-
-    # In[ ]:
-
-
-    #thank_df['sender_edits_on_page_180d_after'].value_counts()
-
-
-    # In[ ]:
-
-
-    # thank_df['receiver_edits_on_page_1d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[1], page=row[3], timestamp=row[0], before_or_after=1), axis=1)
-    # thank_df['receiver_edits_on_page_30d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[1], page=row[3], timestamp=row[0], before_or_after=30), axis=1)
-    # thank_df['receiver_edits_on_page_90d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[1], page=row[3], timestamp=row[0], before_or_after=90), axis=1)
-    # thank_df['receiver_edits_on_page_180d_after'] = thank_df.apply(lambda row: user_edits_on_page_during(user=row[1], page=row[3], timestamp=row[0], before_or_after=180), axis=1)
-
-
-    # ## save the data and back it up
-
-    # In[ ]:
-
-
-    # rearrange = ['timestamp', 'receiver', 'sender', 'log_page', 
-    #              'receiver_prev_received', 'receiver_prev_received_indicator',
-    #              'receiver_prev_sent', 'receiver_prev_sent_indicator',
-    #              'sender_prev_received', 'sender_prev_received_indicator',
-    #              'sender_prev_sent', 'sender_prev_sent_indicator',
-    # #             'receiver_prev_edits', 'sender_prev_edits']
-    # thank_df[rearrange].to_pickle('data/misc/thank_pl_3.pickle')
-
-
-    # In[34]:
-
+    ### END TESTS
 
     outputdir = os.path.join(datadir, 'outputs')
-
-
-    # In[35]:
-
-
     os.makedirs(outputdir, exist_ok=True)
-
-
-    # In[40]:
-
-
     todaystr = dt.today().strftime('%Y%m%d')
-
-
-    # In[42]:
-
-
-    outfile = outfile = os.path.join(outputdir, f'wikithank_{langcode}_{todaystr}.csv')
+    outfile = os.path.join(outputdir, f'wiki{love_thank}_{langcode}_{todaystr}.csv')
+    print(f'Saving file to {outfile}')
     thank_df.to_csv(outfile, index=False)
+    
+if __name__ == '__main__':          
+    @click.command()
+    @click.option('--conf', default='test',
+              help='the json file to look for in configs without `.json`')
+    def read_conf(conf):
+        print(f'running with conf {conf}')
+        configs = json.load(open(os.path.join('configs', f'{conf}.json'),'r'))
+        if 'test_run' in configs.keys():
+            test_run = configs['test_run']
+        else:
+            test_run = False
+        for langcode in configs['langcodes']:
+            for love_thank in ['love', 'thank']:
+                print(f'Now kicking off for: {langcode}. \n Love or thank? {love_thank}. \n Test run?: {test_run}')
+                print('################')
+                make_lang(langcode, love_thank=love_thank, test_run=test_run)
 
-if __name__ == '__main__':
-    main()
+    read_conf()
