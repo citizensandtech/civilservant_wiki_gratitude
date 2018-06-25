@@ -20,7 +20,7 @@ import json
 import click
 
 import warnings
-
+import configparser
 
 def wmftimestamp(bytestring):
     s = bytestring.decode('utf-8')
@@ -105,9 +105,22 @@ def make_lang(langcode, love_thank, test_run=False):
  
     os.makedirs(datadir, exist_ok=True)
 
-    constr = 'mysql+pymysql://{user}:{pwd}@{host}/DB?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
+    os.environ['MYSQL_CATALOG'] = 'DB'
+    replica_file = os.path.expanduser('~/replica.my.cnf')
+    if os.path.isfile(replica_file):
+        #just shoehore this in here if we're on a VPS
+        cnf = configparser.ConfigParser()
+        cnf.read_file(open(replica_file, 'r'))
+        os.environ['MYSQL_USERNAME'] = cnf.get('client','user').replace("'","")
+        os.environ['MYSQL_PASSWORD'] = cnf.get('client','password').replace("'","")
+        os.environ['MYSQL_HOST'] = f'{langcode}wiki.analytics.db.svc.eqiad.wmflabs'
+        os.environ['MYSQL_CATALOG'] = db_prefix
+
+    constr = 'mysql+pymysql://{user}:{pwd}@{host}/{catalog}?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
                                                           pwd=os.environ['MYSQL_PASSWORD'],
-                                                          host=os.environ['MYSQL_HOST'])
+                                                          host=os.environ['MYSQL_HOST'],
+catalog=os.environ['MYSQL_CATALOG'])
+    print(f'constring is: {constr}')
     global con
     con = create_engine(constr, encoding='utf-8')
 
