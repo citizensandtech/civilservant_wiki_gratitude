@@ -64,14 +64,15 @@ def proc_user(user_id):
                     df.to_pickle(pickle_path)
                     return True
                 except Exception as e:
-                    print(e)
+                    print(f'SQL query is {sql}')
+                    print(f'Exception is {e}')
                     retries += 1
             return False
 
         
         
         else:
-            print('we already did: {}'.format(user_id))
+            sys.stdout.write('.')
             pass
     #this corresontp
     else:
@@ -95,9 +96,9 @@ def make_lang(langcode, love_thank, test_run=False):
     outfilecompl = f'{outfilestart}_{todaystr}.csv'
     outfile =  os.path.join(outputdir, outfilecompl)
     outputlist = os.listdir(outputdir)
-    print(f'outfilestart is {outfilestart}.  output dir list is: {outputdir}')
     if outfilecompl in outputlist:
         #we've already donet this recently enough
+        print(f'outfilestart is {outfilestart}.  output dir list is: {outputlist}')
         return True
     
     
@@ -122,6 +123,8 @@ def make_lang(langcode, love_thank, test_run=False):
     (select log_timestamp as timestamp, replace(log_title, '_', ' ') as receiver, log_user_text as sender from {db_prefix}.logging where log_type = 'thanks') t
     left join {db_prefix}.user ru on ru.user_name = t.receiver
     left join {db_prefix}.user su on su.user_name = t.sender
+    where
+    timestamp < 20180601000000
     """
 
     love_sql = f"""select wll_timestamp as timestamp, 
@@ -130,7 +133,9 @@ def make_lang(langcode, love_thank, test_run=False):
     wll_sender as sender, 
     wll_sender as sender_id,
     wll_type
-    from {db_prefix}.wikilove_log"""
+    from {db_prefix}.wikilove_log
+    where
+    wll_timestamp < 20180601000000"""
     
     which_sql_dict = {'thank':thanks_sql,
                        'love':love_sql}
@@ -195,8 +200,8 @@ def make_lang(langcode, love_thank, test_run=False):
 
     for direction in ['sender','receiver']:
         for oldname, newname in actual_moves.items():
-            user_id = get_id(oldname)
-            print(f'going to replace {oldname} with {user_id}')
+            user_id = get_id(newname)
+            print(f'going to replace {newname} with {user_id}')
             thank_df.loc[thank_df[direction] == oldname, f'{direction}_id'] = user_id
 
 
@@ -223,7 +228,7 @@ def make_lang(langcode, love_thank, test_run=False):
     #gymnastic to tryin to keep functional with the multiprocessing requiremnet that functions live in root namespace
     user_ids_withdir = [(u, userhistlist, db_prefix, con) for u in user_ids]
 
-    with Pool(4) as p:
+    with Pool(10) as p:
         res = p.map_async(proc_user, user_ids)
         res.get()
 
@@ -431,6 +436,16 @@ if __name__ == '__main__':
             for love_thank in ['love', 'thank']:
                 print(f'Now kicking off for: {langcode}. \n Love or thank? {love_thank}. \n Test run?: {test_run}')
                 print('################')
-                make_lang(langcode, love_thank=love_thank, test_run=test_run)
-
+                MAXOUTERLOOPRETRIES = 10
+                outerloopretry = 0
+                while outerloopretry < MAXOUTERLOOPRETRIES:
+                    try:
+                        make_lang(langcode, love_thank=love_thank, test_run=test_run)
+                        break
+                    except Exception as e:
+                        print(f'outerloopexecption is {e}')
+                        print(f'retry number {outerloopretry}')
+                        outerloopretry += 1
+                        sleep(outerloopretry**2)
+                
     read_conf()
