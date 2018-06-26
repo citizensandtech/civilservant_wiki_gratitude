@@ -64,14 +64,15 @@ def proc_user(user_id):
                     df.to_pickle(pickle_path)
                     return True
                 except Exception as e:
-                    print(e)
+                    print(f'SQL query is {sql}')
+                    print(f'Exception is {e}')
                     retries += 1
             return False
 
         
         
         else:
-            print('we already did: {}'.format(user_id))
+            sys.stdout.write('.')
             pass
     #this corresontp
     else:
@@ -95,9 +96,9 @@ def make_lang(langcode, love_thank, test_run=False):
     outfilecompl = f'{outfilestart}_{todaystr}.csv'
     outfile =  os.path.join(outputdir, outfilecompl)
     outputlist = os.listdir(outputdir)
-    print(f'outfilestart is {outfilestart}.  output dir list is: {outputdir}')
     if outfilecompl in outputlist:
         #we've already donet this recently enough
+        print(f'outfilestart is {outfilestart}.  output dir list is: {outputlist}')
         return True
     
     
@@ -135,6 +136,8 @@ catalog=os.environ['MYSQL_CATALOG'])
     (select log_timestamp as timestamp, replace(log_title, '_', ' ') as receiver, log_user_text as sender from {db_prefix}.logging where log_type = 'thanks') t
     left join {db_prefix}.user ru on ru.user_name = t.receiver
     left join {db_prefix}.user su on su.user_name = t.sender
+    where
+    timestamp < 20180601000000
     """
 
     love_sql = f"""select wll_timestamp as timestamp, 
@@ -143,7 +146,9 @@ catalog=os.environ['MYSQL_CATALOG'])
     wll_sender as sender, 
     wll_sender as sender_id,
     wll_type
-    from {db_prefix}.wikilove_log"""
+    from {db_prefix}.wikilove_log
+    where
+    wll_timestamp < 20180601000000"""
     
     which_sql_dict = {'thank':thanks_sql,
                        'love':love_sql}
@@ -208,8 +213,8 @@ catalog=os.environ['MYSQL_CATALOG'])
 
     for direction in ['sender','receiver']:
         for oldname, newname in actual_moves.items():
-            user_id = get_id(oldname)
-            print(f'going to replace {oldname} with {user_id}')
+            user_id = get_id(newname)
+            print(f'going to replace {newname} with {user_id}')
             thank_df.loc[thank_df[direction] == oldname, f'{direction}_id'] = user_id
 
 
@@ -236,7 +241,7 @@ catalog=os.environ['MYSQL_CATALOG'])
     #gymnastic to tryin to keep functional with the multiprocessing requiremnet that functions live in root namespace
     user_ids_withdir = [(u, userhistlist, db_prefix, con) for u in user_ids]
 
-    with Pool(4) as p:
+    with Pool(10) as p:
         res = p.map_async(proc_user, user_ids)
         res.get()
 
@@ -339,42 +344,58 @@ catalog=os.environ['MYSQL_CATALOG'])
             return len(df[(tc1) & (tc2)])
 
 
-
+    print('computing rpr')
     thank_df['receiver_prev_received'] = thank_df.apply(lambda row: thank_another(user=row[1], role='receiver', timestamp=row[0], future=None), axis=1)
 
+    print('computing rps')
     thank_df['receiver_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=None), axis=1)
 
+    print('computing spr')
     thank_df['sender_prev_received'] = thank_df.apply(lambda row: thank_another(user=row[3], role='receiver', timestamp=row[0], future=None), axis=1)
 
+    print('computing sps')
     thank_df['sender_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[3], role='sender', timestamp=row[0], future=None), axis=1)
 
-
+    print('computing indicators')
     conticols = ["receiver_prev_received","sender_prev_received","sender_prev_sent","receiver_prev_sent"]
     for col in conticols:
         indcol = "{col}_indicator".format(col=col)
         thank_df[indcol] = thank_df[col].apply(lambda x: x>0)
 
-
+    print('computing rpe')
     thank_df['receiver_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1)
+
+    print('computing spe')
     thank_df['sender_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[4], prior_to=row[0]), axis=1)
 
+    print('computing first edits')
     thank_df['sender_first_edit'] = thank_df['sender_id'].apply(first_edit)
     thank_df['receiver_first_edit'] = thank_df['receiver_id'].apply(first_edit)
 
-
+    print('computing se1d')
     thank_df['sender_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
+    print('computing se30d')
     thank_df['sender_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=30), axis=1)
+    print('computing se90d')
     thank_df['sender_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=90), axis=1)
+    print('computing se180d')
     thank_df['sender_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=180), axis=1)
+    print('computing re1d')
     thank_df['receiver_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=1), axis=1)
+    print('computing re30d')
     thank_df['receiver_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=30), axis=1)
+    print('computing re90d')
     thank_df['receiver_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=90), axis=1)
+    print('computing re180d')
     thank_df['receiver_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=180), axis=1)
 
-
+    print('computing rta1d')
     thank_df['receiver_thank_another_1d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=1), axis=1)
+    print('computing rta30d')
     thank_df['receiver_thank_another_30d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=30), axis=1)
+    print('computing rta90d')
     thank_df['receiver_thank_another_90d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=90), axis=1)
+    print('computing rta180d')
     thank_df['receiver_thank_another_180d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=180), axis=1)
 
 
@@ -418,7 +439,7 @@ catalog=os.environ['MYSQL_CATALOG'])
 
     for name, group in thank_df.groupby('sender'):
         assert len(group['sender_first_edit'].unique()) == 1
-
+    print('all tests passed')
 
     ### END TESTS
 
@@ -444,6 +465,17 @@ if __name__ == '__main__':
             for love_thank in ['love', 'thank']:
                 print(f'Now kicking off for: {langcode}. \n Love or thank? {love_thank}. \n Test run?: {test_run}')
                 print('################')
-                make_lang(langcode, love_thank=love_thank, test_run=test_run)
+                MAXOUTERLOOPRETRIES = 2
+                outerloopretry = 0
+                while outerloopretry < MAXOUTERLOOPRETRIES:
+                    try:
+                        make_lang(langcode, love_thank=love_thank, test_run=test_run)
+                        break
+                    except Exception as e:
+                        print(f'outerloopexecption is {e}')
+                        print(f'retry number {outerloopretry}')
+                        outerloopretry += 1
+                        sleep(outerloopretry**2)
 
+    #and finall run it
     read_conf()
