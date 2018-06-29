@@ -162,6 +162,9 @@ catalog=os.environ['MYSQL_CATALOG'])
     thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
     thank_df['timestamp'] = thank_df['timestamp'].apply(wmftimestamp)
     
+    if love_thank == 'love':
+        thank_df['wll_type'] = thank_df['wll_type'].apply(decode_or_nouser)
+
     print('#####')
     print(f'love_thank is {love_thank}')
     print(thank_df.head())
