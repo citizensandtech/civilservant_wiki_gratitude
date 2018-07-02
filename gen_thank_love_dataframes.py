@@ -13,7 +13,7 @@ import mwclient
 import mwviews
 
 from multiprocessing import Pool
-    
+
 from time import sleep
 import random
 import json
@@ -48,7 +48,7 @@ def proc_user(user_id):
         pickle_filename = '{}.pickle'.format(user_id)
         if not pickle_filename in userhistlist:
             sql = f'''
-            select rev_timestamp from {db_prefix}.revision r
+            select rev_timestamp from {db_prefix}.revision_userindex r
             where rev_user = {user_id}'''
             #print(rev_user_sql)
             MAXRETRIES = 4
@@ -69,8 +69,8 @@ def proc_user(user_id):
                     retries += 1
             return False
 
-        
-        
+
+
         else:
             sys.stdout.write('.')
             pass
@@ -81,14 +81,14 @@ def proc_user(user_id):
 
 
 def make_lang(langcode, love_thank, test_run=False):
-    
+
     # i hate using globals, but because of multiprocess headaches this might be simple
     global datadir
     datadir = os.path.join('data', langcode)
     global db_prefix
     db_prefix = '{}wiki_p'.format(langcode)
-    
-    # test if we're already done.  
+
+    # test if we're already done.
     outputdir = os.path.join(datadir, 'outputs')
     os.makedirs(outputdir, exist_ok=True)
     todaystr = dt.today().strftime('%Y%m%d')
@@ -100,10 +100,10 @@ def make_lang(langcode, love_thank, test_run=False):
         #we've already donet this recently enough
         print(f'outfilestart is {outfilestart}.  output dir list is: {outputlist}')
         return True
-    
-    
+
+
     site = mwclient.Site(('https', f'{langcode}.wikipedia.org'), path = '/w/')
- 
+
     os.makedirs(datadir, exist_ok=True)
 
     os.environ['MYSQL_CATALOG'] = 'DB'
@@ -120,7 +120,7 @@ def make_lang(langcode, love_thank, test_run=False):
     constr = 'mysql+pymysql://{user}:{pwd}@{host}/{catalog}?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
                                                           pwd=os.environ['MYSQL_PASSWORD'],
                                                           host=os.environ['MYSQL_HOST'],
-catalog=os.environ['MYSQL_CATALOG'])
+                                                          catalog=os.environ['MYSQL_CATALOG'])
     print(f'constring is: {constr}')
     global con
     con = create_engine(constr, encoding='utf-8')
@@ -128,7 +128,7 @@ catalog=os.environ['MYSQL_CATALOG'])
 #     con.execute(f'use {db_prefix};')
 
     thanks_sql = f"""select timestamp,
-            receiver, 
+            receiver,
             ru.user_id as receiver_id,
             sender,
             su.user_id as sender_id
@@ -140,19 +140,20 @@ catalog=os.environ['MYSQL_CATALOG'])
     timestamp < 20180601000000
     """
 
-    love_sql = f"""select wll_timestamp as timestamp, 
-    wll_receiver as receiver, 
-    wll_receiver as receiver_id, 
-    wll_sender as sender, 
+    love_sql = f"""select wll_timestamp as timestamp,
+    wll_receiver as receiver,
+    wll_receiver as receiver_id,
+    wll_sender as sender,
     wll_sender as sender_id,
     wll_type
     from {db_prefix}.wikilove_log
     where
-    wll_timestamp < 20180601000000"""
-    
+    wll_timestamp < 20180601000000
+    """
+
     which_sql_dict = {'thank':thanks_sql,
                        'love':love_sql}
-    
+
     which_sql = which_sql_dict[love_thank]
 
     thank_df = pd.read_sql(which_sql, con)
@@ -161,7 +162,7 @@ catalog=os.environ['MYSQL_CATALOG'])
     thank_df['receiver'] = thank_df['receiver'].apply(decode_or_nouser)
     thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
     thank_df['timestamp'] = thank_df['timestamp'].apply(wmftimestamp)
-    
+
     if love_thank == 'love':
         thank_df['wll_type'] = thank_df['wll_type'].apply(decode_or_nouser)
 
@@ -174,10 +175,7 @@ catalog=os.environ['MYSQL_CATALOG'])
         thank_df_full = thank_df
         thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
 
-
     ## Get changed name ids
-
-
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
     sender_noid = thank_df[pd.isnull(thank_df['sender_id'])]['sender'].unique()
     user_noid = set()
@@ -199,7 +197,6 @@ catalog=os.environ['MYSQL_CATALOG'])
 
     actual_moves = {user: try_follow_user_redirect(user) for user in user_noid if try_follow_user_redirect(user)}
 
-
     def get_id(user):
         rec_user_df = thank_df[thank_df['receiver']==user]
         sen_user_df = thank_df[thank_df['sender']==user]
@@ -211,7 +208,7 @@ catalog=os.environ['MYSQL_CATALOG'])
             return user_id
         else:
             #TODO
-            #we'd have to go make a seperate sql query for this 
+            #we'd have to go make a seperate sql query for this
             return -1
 
     for direction in ['sender','receiver']:
@@ -226,9 +223,6 @@ catalog=os.environ['MYSQL_CATALOG'])
     thank_df['sender_id'] = thank_df['sender_id'].fillna(-1).astype(int)
 
 
-
-
-
     user_ids = set()
     user_ids.update(thank_df['receiver_id'].values)
     user_ids.update(thank_df['sender_id'].values)
@@ -240,7 +234,7 @@ catalog=os.environ['MYSQL_CATALOG'])
     global userhistlist
     userhistlist = os.listdir(userhistdir)
 
-    
+
     #gymnastic to tryin to keep functional with the multiprocessing requiremnet that functions live in root namespace
     user_ids_withdir = [(u, userhistlist, db_prefix, con) for u in user_ids]
 
@@ -275,7 +269,7 @@ catalog=os.environ['MYSQL_CATALOG'])
         if not userid in usercache.keys():
             df, user_exists = load_userid_df(userid)
             if not user_exists:
-                return 
+                return
             else:
                 usercache[userid] = df
         else:
@@ -415,7 +409,7 @@ catalog=os.environ['MYSQL_CATALOG'])
         if np.any(np.isnan(x)):
             return True
         else:
-            assert np.all(np.diff(x) >= 0)   
+            assert np.all(np.diff(x) >= 0)
 
     most_sender = thank_df['sender'].value_counts().index[0]
 
@@ -452,8 +446,8 @@ catalog=os.environ['MYSQL_CATALOG'])
     outfile = os.path.join(outputdir, f'wiki{love_thank}_{langcode}_{todaystr}.csv')
     print(f'Saving file to {outfile}')
     thank_df.to_csv(outfile, index=False)
-    
-if __name__ == '__main__':          
+
+if __name__ == '__main__':
     @click.command()
     @click.option('--conf', default='test',
               help='the json file to look for in configs without `.json`')
