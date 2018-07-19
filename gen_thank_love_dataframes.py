@@ -9,9 +9,10 @@ from datetime import datetime as dt
 from datetime import timedelta as td
 
 import mwclient
+import multiprocessing
+from multiprocessing import Pool, cpu_count
 
-from multiprocessing import Pool
-
+import time
 from time import sleep
 import random
 import json
@@ -37,6 +38,64 @@ datadir = ''
 db_prefix = ''
 userhistlist = ''
 con = None
+thank_df = None
+
+thankcache = {}
+def thank_another(user, role, timestamp,  future):
+    cachekey = f'{user}_{role}'
+    if not cachekey in thankcache.keys():
+        user_cond = (thank_df[role] == user)
+        df = thank_df[user_cond]
+        thankcache[user] = df
+    else:
+        df = thankcache[cachekey]
+        
+    if not future:
+        time_cond = df['timestamp'] < timestamp
+        return len(df[time_cond])
+    else:
+        high_end = timestamp + td(days=future)
+        tc1 = df['timestamp'] > timestamp
+        tc2 = df['timestamp'] <= high_end
+        return len(df[(tc1) & (tc2)])
+
+thankcachemp = {} 
+def rpr_mp(row):
+    user = row['receiver']
+    role = 'receiver'
+    timestamp = row['timestamp']
+    future = False
+    cachekey = f'{user}_{role}'
+    if not cachekey in thankcachemp.keys():
+        user_cond = (thank_df[role] == user)
+        df = thank_df[user_cond]
+        thankcachemp[user] = df
+    else:
+        df = thankcachemp[cachekey]
+        
+    if not future:
+        time_cond = df['timestamp'] < timestamp
+        return len(df[time_cond])
+    else:
+        high_end = timestamp + td(days=future)
+        tc1 = df['timestamp'] > timestamp
+        tc2 = df['timestamp'] <= high_end
+        return len(df[(tc1) & (tc2)])
+
+
+def _apply_df(args):
+    df, func, kwargs = args
+    # print(f'df: {len(df)}. func:{func}. kwags:{kwargs}')
+    return df.apply(func, **kwargs)
+
+def apply_mp(df, func, **kwargs):
+    workers = cpu_count()
+    pool = multiprocessing.Pool(processes=workers)
+    result = pool.map(_apply_df, [(d, func, kwargs)
+                                  for d in np.array_split(df, workers)])
+    pool.close()
+    return pd.concat(list(result))
+
 
 def proc_user(user_id):
 #     print('doing {}'.format(user_id))
@@ -78,13 +137,14 @@ def proc_user(user_id):
         pass
 
 
-def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
+def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_thank_df=False):
 
     # i hate using globals, but because of multiprocess headaches this might be simple
     global datadir
     datadir = os.path.join('data', langcode)
     global db_prefix
     db_prefix = '{}wiki_p'.format(langcode)
+    global thank_df
 
     # test if we're already done.
     outputdir = os.path.join(datadir, 'outputs')
@@ -97,84 +157,93 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
     if outfilecompl in outputlist:
         #we've already donet this recently enough
         print(f'outfilestart is {outfilestart}.  output dir list is: {outputlist}')
-        return True
-
+        print('but im passing')
+        #return True
+        pass
 
     site = mwclient.Site(('https', f'{langcode}.wikipedia.org'), path = '/w/')
 
     os.makedirs(datadir, exist_ok=True)
 
-    os.environ['MYSQL_CATALOG'] = 'DB'
-    replica_file = os.path.expanduser('~/replica.my.cnf')
-    if os.path.isfile(replica_file):
-        #just shoehore this in here if we're on a VPS
-        cnf = configparser.ConfigParser()
-        cnf.read_file(open(replica_file, 'r'))
-        os.environ['MYSQL_USERNAME'] = cnf.get('client','user').replace("'","")
-        os.environ['MYSQL_PASSWORD'] = cnf.get('client','password').replace("'","")
-        os.environ['MYSQL_HOST'] = f'{langcode}wiki.analytics.db.svc.eqiad.wmflabs'
-        os.environ['MYSQL_CATALOG'] = db_prefix
+    if not load_thank_df:
+        os.environ['MYSQL_CATALOG'] = 'DB'
+        replica_file = os.path.expanduser('~/replica.my.cnf')
+        if os.path.isfile(replica_file):
+            #just shoehore this in here if we're on a VPS
+            cnf = configparser.ConfigParser()
+            cnf.read_file(open(replica_file, 'r'))
+            os.environ['MYSQL_USERNAME'] = cnf.get('client','user').replace("'","")
+            os.environ['MYSQL_PASSWORD'] = cnf.get('client','password').replace("'","")
+            os.environ['MYSQL_HOST'] = f'{langcode}wiki.analytics.db.svc.eqiad.wmflabs'
+            os.environ['MYSQL_CATALOG'] = db_prefix
 
-    constr = 'mysql+pymysql://{user}:{pwd}@{host}/{catalog}?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
-                                                          pwd=os.environ['MYSQL_PASSWORD'],
-                                                          host=os.environ['MYSQL_HOST'],
-                                                          catalog=os.environ['MYSQL_CATALOG'])
-    print(f'constring is: {constr}')
-    global con
-    con = create_engine(constr, encoding='utf-8')
+        constr = 'mysql+pymysql://{user}:{pwd}@{host}/{catalog}?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
+                                                              pwd=os.environ['MYSQL_PASSWORD'],
+                                                              host=os.environ['MYSQL_HOST'],
+                                                              catalog=os.environ['MYSQL_CATALOG'])
+        print(f'constring is: {constr}')
+        global con
+        con = create_engine(constr, encoding='utf-8')
 
-#     con.execute(f'use {db_prefix};')
+    #     con.execute(f'use {db_prefix};')
 
-    thanks_sql = f"""select timestamp,
-            receiver,
-            ru.user_id as receiver_id,
-            sender,
-            su.user_id as sender_id
-    from
-    (select log_timestamp as timestamp, replace(log_title, '_', ' ') as receiver, log_user_text as sender from {db_prefix}.logging where log_type = 'thanks') t
-    left join {db_prefix}.user ru on ru.user_name = t.receiver
-    left join {db_prefix}.user su on su.user_name = t.sender
-    where
-    timestamp < 20180601000000
-    """
+        thanks_sql = f"""select timestamp,
+                receiver,
+                ru.user_id as receiver_id,
+                sender,
+                su.user_id as sender_id
+        from
+        (select log_timestamp as timestamp, replace(log_title, '_', ' ') as receiver, log_user_text as sender from {db_prefix}.logging where log_type = 'thanks') t
+        left join {db_prefix}.user ru on ru.user_name = t.receiver
+        left join {db_prefix}.user su on su.user_name = t.sender
+        where
+        timestamp < 20180601000000
+        """
 
-    love_sql = f"""select wll_timestamp as timestamp,
-    wll_receiver as receiver,
-    wll_receiver as receiver_id,
-    wll_sender as sender,
-    wll_sender as sender_id,
-    wll_type
-    from {db_prefix}.wikilove_log
-    where
-    wll_timestamp < 20180601000000
-    """
+        love_sql = f"""select wll_timestamp as timestamp,
+        wll_receiver as receiver,
+        wll_receiver as receiver_id,
+        wll_sender as sender,
+        wll_sender as sender_id,
+        wll_type
+        from {db_prefix}.wikilove_log
+        where
+        wll_timestamp < 20180601000000
+        """
 
-    which_sql_dict = {'thank':thanks_sql,
-                       'love':love_sql}
+        which_sql_dict = {'thank':thanks_sql,
+                           'love':love_sql}
 
-    which_sql = which_sql_dict[love_thank]
-    print('starting to execute sql...')
-    thank_df = pd.read_sql(which_sql, con)
-    print('got sql')
+        which_sql = which_sql_dict[love_thank]
 
-    thank_df['receiver'] = thank_df['receiver'].apply(decode_or_nouser)
-    thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
-    thank_df['timestamp'] = thank_df['timestamp'].apply(wmftimestamp)
+        thank_df = pd.read_sql(which_sql, con)
 
-    if love_thank == 'love':
-        thank_df['wll_type'] = thank_df['wll_type'].apply(decode_or_nouser)
 
-    print('#####')
-    print(f'love_thank is {love_thank}')
-    print(thank_df.head())
+        thank_df['receiver'] = thank_df['receiver'].apply(decode_or_nouser)
+        thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
+        thank_df['timestamp'] = thank_df['timestamp'].apply(wmftimestamp)
 
-    ## Shorten the dataframe if we're testing
-    if test_run:
-        thank_df_full = thank_df
-        thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
-    print(f'going to dump df?: {dump_thank_df}')
-    if dump_thank_df:
-        thank_df.to_pickle(os.path.join(datadir, 'outputs/thank_df.pickle'))
+        if love_thank == 'love':
+            thank_df['wll_type'] = thank_df['wll_type'].apply(decode_or_nouser)
+
+        print('#####')
+        print(f'love_thank is {love_thank}')
+        print(thank_df.head())
+
+        ## Shorten the dataframe if we're testing
+        if test_run:
+            thank_df_full = thank_df
+            thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
+
+        if dump_thank_df:
+            pd.to_pickle('results/thank_df.pickle')
+
+    #otherwise we are loading thank df
+    else:
+        assert load_thank_df
+        thank_df = pd.read_pickle(os.path.join(datadir, 'outputs/thank_df.pickle'))
+        if test_run:
+            thank_df = thank_df[:100]
 
     ## Get changed name ids
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
@@ -322,80 +391,73 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
             return len(df[(tc1) & (tc2)  & (user_cond)])
 
 
-    thankcache = {}
-    def thank_another(user, role, timestamp,  future):
-        cachekey = f'{user}_{role}'
-        if not cachekey in thankcache.keys():
-            user_cond = (thank_df[role] == user)
-            df = thank_df[user_cond]
-            thankcache[user] = df
-        else:
-            df = thankcache[cachekey]
+    # apply_by_multiprocessing(df, square, axis=1) 
 
-        if not future:
-            time_cond = df['timestamp'] < timestamp
-            return len(df[time_cond])
-        else:
-            high_end = timestamp + td(days=future)
-            tc1 = df['timestamp'] > timestamp
-            tc2 = df['timestamp'] <= high_end
-            return len(df[(tc1) & (tc2)])
-
-
-
-    print('computing rpr')
+    print('computing rpr: a')
+    t1 = time.time()
     thank_df['receiver_prev_received'] = thank_df.apply(lambda row: thank_another(user=row[1], role='receiver', timestamp=row[0], future=None), axis=1)
+    t2 = time.time()
+    print('computing rpr: b')
+    thank_df['receiver_prev_received_mp'] = apply_mp(thank_df, rpr_mp, axis=1)
+    t3 = time.time()
+    print(f'way 1 took: {t2-t1}')
+    print(f'way 2 took: {t3-t2}')
+    comp = thank_df['receiver_prev_received']==thank_df['receiver_prev_received_mp']
+    if not all(comp):
+        print(f"not the same")
+    else:
+        print('result were the same')
 
-    print('computing rps')
-    thank_df['receiver_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=None), axis=1)
+    # print('computing rps')
+    # thank_df['receiver_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=None), axis=1)
 
-    print('computing spr')
-    thank_df['sender_prev_received'] = thank_df.apply(lambda row: thank_another(user=row[3], role='receiver', timestamp=row[0], future=None), axis=1)
+    # print('computing spr')
+    # thank_df['sender_prev_received'] = thank_df.apply(lambda row: thank_another(user=row[3], role='receiver', timestamp=row[0], future=None), axis=1)
 
-    print('computing sps')
-    thank_df['sender_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[3], role='sender', timestamp=row[0], future=None), axis=1)
+    # print('computing sps')
+    # thank_df['sender_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[3], role='sender', timestamp=row[0], future=None), axis=1)
 
-    print('computing indicators')
-    conticols = ["receiver_prev_received","sender_prev_received","sender_prev_sent","receiver_prev_sent"]
-    for col in conticols:
-        indcol = "{col}_indicator".format(col=col)
-        thank_df[indcol] = thank_df[col].apply(lambda x: x>0)
+    # print('computing indicators')
+    # conticols = ["receiver_prev_received","sender_prev_received","sender_prev_sent","receiver_prev_sent"]
+    # for col in conticols:
+    #     indcol = "{col}_indicator".format(col=col)
+    #     thank_df[indcol] = thank_df[col].apply(lambda x: x>0)
 
-    print('computing rpe')
-    thank_df['receiver_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1)
+    # print('computing rpe')
+    # thank_df['receiver_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1)
 
-    print('computing spe')
-    thank_df['sender_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[4], prior_to=row[0]), axis=1)
+    # print('computing spe')
+    # thank_df['sender_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[4], prior_to=row[0]), axis=1)
 
-    print('computing first edits')
-    thank_df['sender_first_edit'] = thank_df['sender_id'].apply(first_edit)
-    thank_df['receiver_first_edit'] = thank_df['receiver_id'].apply(first_edit)
+    # print('computing first edits')
+    # thank_df['sender_first_edit'] = thank_df['sender_id'].apply(first_edit)
+    # thank_df['receiver_first_edit'] = thank_df['receiver_id'].apply(first_edit)
 
-    print('computing se1d')
-    thank_df['sender_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
-    print('computing se30d')
-    thank_df['sender_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=30), axis=1)
-    print('computing se90d')
-    thank_df['sender_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=90), axis=1)
-    print('computing se180d')
-    thank_df['sender_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=180), axis=1)
-    print('computing re1d')
-    thank_df['receiver_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=1), axis=1)
-    print('computing re30d')
-    thank_df['receiver_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=30), axis=1)
-    print('computing re90d')
-    thank_df['receiver_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=90), axis=1)
-    print('computing re180d')
-    thank_df['receiver_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=180), axis=1)
+    # print('computing se1d')
+    # thank_df['sender_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
+    # print('computing se30d')
+    # thank_df['sender_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=30), axis=1)
+    # print('computing se90d')
+    # thank_df['sender_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=90), axis=1)
+    # print('computing se180d')
+    # thank_df['sender_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=180), axis=1)
+    # print('computing re1d')
+    # thank_df['receiver_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=1), axis=1)
+    # print('computing re30d')
+    # thank_df['receiver_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=30), axis=1)
+    # print('computing re90d')
+    # thank_df['receiver_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=90), axis=1)
+    # print('computing re180d')
+    # thank_df['receiver_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=180), axis=1)
 
-    print('computing rta1d')
-    thank_df['receiver_thank_another_1d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=1), axis=1)
-    print('computing rta30d')
-    thank_df['receiver_thank_another_30d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=30), axis=1)
-    print('computing rta90d')
-    thank_df['receiver_thank_another_90d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=90), axis=1)
-    print('computing rta180d')
-    thank_df['receiver_thank_another_180d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=180), axis=1)
+    # print('computing rta1d')
+    # thank_df['receiver_thank_another_1d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=1), axis=1)
+    # print('computing rta30d')
+    # thank_df['receiver_thank_another_30d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=30), axis=1)
+    # print('computing rta90d')
+    # thank_df['receiver_thank_another_90d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=90), axis=1)
+    # print('computing rta180d')  
+    # thank_df['receiver_thank_another_180d_after'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=180), axis=1) 
 
 
     # TESTS
@@ -456,14 +518,15 @@ if __name__ == '__main__':
     def read_conf(conf):
         print(f'running with conf {conf}')
         configs = json.load(open(os.path.join('configs', f'{conf}.json'),'r'))
+        test_run = False
+        dump_thank_df = False
+        load_thank_df = False
         if 'test_run' in configs.keys():
             test_run = configs['test_run']
-        else:
-            test_run = False
         if 'dump_thank_df' in configs.keys():
             dump_thank_df = configs['dump_thank_df']
-        else:
-            dump_thank_df = False
+        if 'load_thank_df' in configs.keys():
+            load_thank_df = configs['load_thank_df']
 
         for langcode in configs['langcodes']:
             for love_thank in ['thank', 'love']:
@@ -473,7 +536,10 @@ if __name__ == '__main__':
                 outerloopretry = 0
                 while outerloopretry < MAXOUTERLOOPRETRIES:
                     try:
-                        make_lang(langcode, love_thank=love_thank, test_run=test_run, dump_thank_df=dump_thank_df)
+                        make_lang(langcode, love_thank=love_thank,
+                                  test_run=test_run,
+                                  dump_thank_df=dump_thank_df,
+                                  load_thank_df=load_thank_df)
                         break
                     except Exception as e:
                         print(f'outerloopexecption is {e}')
