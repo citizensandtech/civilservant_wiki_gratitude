@@ -1,6 +1,5 @@
 from sqlalchemy import create_engine
 from sqlalchemy.exc import ProgrammingError
-from pymysql.err import InternalError, OperationalError
 import sys, os
 import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -10,7 +9,6 @@ from datetime import datetime as dt
 from datetime import timedelta as td
 
 import mwclient
-import mwviews
 
 from multiprocessing import Pool
 
@@ -80,7 +78,7 @@ def proc_user(user_id):
         pass
 
 
-def make_lang(langcode, love_thank, test_run=False):
+def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
 
     # i hate using globals, but because of multiprocess headaches this might be simple
     global datadir
@@ -174,6 +172,9 @@ def make_lang(langcode, love_thank, test_run=False):
     if test_run:
         thank_df_full = thank_df
         thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
+
+    if dump_thank_df:
+        pd.to_pickle('results/thank_df.pickle')
 
     ## Get changed name ids
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
@@ -341,6 +342,7 @@ def make_lang(langcode, love_thank, test_run=False):
             return len(df[(tc1) & (tc2)])
 
 
+
     print('computing rpr')
     thank_df['receiver_prev_received'] = thank_df.apply(lambda row: thank_another(user=row[1], role='receiver', timestamp=row[0], future=None), axis=1)
 
@@ -458,6 +460,11 @@ if __name__ == '__main__':
             test_run = configs['test_run']
         else:
             test_run = False
+        if 'dump_thank_df' in configs.keys():
+            dump_thank_df = configs['dump_thank_df']
+        else:
+            dump_thank_df = False
+
         for langcode in configs['langcodes']:
             for love_thank in ['love', 'thank']:
                 print(f'Now kicking off for: {langcode}. \n Love or thank? {love_thank}. \n Test run?: {test_run}')
@@ -466,7 +473,7 @@ if __name__ == '__main__':
                 outerloopretry = 0
                 while outerloopretry < MAXOUTERLOOPRETRIES:
                     try:
-                        make_lang(langcode, love_thank=love_thank, test_run=test_run)
+                        make_lang(langcode, love_thank=love_thank, test_run=test_run, dump_thank_df=dump_thank_df)
                         break
                     except Exception as e:
                         print(f'outerloopexecption is {e}')
