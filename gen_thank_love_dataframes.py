@@ -72,7 +72,7 @@ def proc_user(user_id):
 
 
         else:
-            sys.stdout.write('.')
+            sys.stdout.write('')#make '.' if yuo want to see progress
             pass
     #this corresontp
     else:
@@ -459,7 +459,7 @@ if __name__ == '__main__':
         else:
             test_run = False
         for langcode in configs['langcodes']:
-            for love_thank in ['love', 'thank']:
+            for love_thank in ['thank', 'love']:
                 print(f'Now kicking off for: {langcode}. \n Love or thank? {love_thank}. \n Test run?: {test_run}')
                 print('################')
                 MAXOUTERLOOPRETRIES = 2
