@@ -153,9 +153,9 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
                        'love':love_sql}
 
     which_sql = which_sql_dict[love_thank]
-
+    print('starting to execute sql...')
     thank_df = pd.read_sql(which_sql, con)
-
+    print('got sql')
 
     thank_df['receiver'] = thank_df['receiver'].apply(decode_or_nouser)
     thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
@@ -172,9 +172,9 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
     if test_run:
         thank_df_full = thank_df
         thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
-
+    print(f'going to dump df?: {dump_thank_df}')
     if dump_thank_df:
-        pd.to_pickle('results/thank_df.pickle')
+        thank_df.to_pickle(os.path.join(datadir, 'outputs/thank_df.pickle'))
 
     ## Get changed name ids
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
