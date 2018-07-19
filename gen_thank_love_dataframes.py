@@ -78,7 +78,7 @@ def proc_user(user_id):
         pass
 
 
-def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
+def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_thank_df=False):
 
     # i hate using globals, but because of multiprocess headaches this might be simple
     global datadir
@@ -104,77 +104,85 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False):
 
     os.makedirs(datadir, exist_ok=True)
 
-    os.environ['MYSQL_CATALOG'] = 'DB'
-    replica_file = os.path.expanduser('~/replica.my.cnf')
-    if os.path.isfile(replica_file):
-        #just shoehore this in here if we're on a VPS
-        cnf = configparser.ConfigParser()
-        cnf.read_file(open(replica_file, 'r'))
-        os.environ['MYSQL_USERNAME'] = cnf.get('client','user').replace("'","")
-        os.environ['MYSQL_PASSWORD'] = cnf.get('client','password').replace("'","")
-        os.environ['MYSQL_HOST'] = f'{langcode}wiki.analytics.db.svc.eqiad.wmflabs'
-        os.environ['MYSQL_CATALOG'] = db_prefix
+    if not load_thank_df:
+        os.environ['MYSQL_CATALOG'] = 'DB'
+        replica_file = os.path.expanduser('~/replica.my.cnf')
+        if os.path.isfile(replica_file):
+            #just shoehore this in here if we're on a VPS
+            cnf = configparser.ConfigParser()
+            cnf.read_file(open(replica_file, 'r'))
+            os.environ['MYSQL_USERNAME'] = cnf.get('client','user').replace("'","")
+            os.environ['MYSQL_PASSWORD'] = cnf.get('client','password').replace("'","")
+            os.environ['MYSQL_HOST'] = f'{langcode}wiki.analytics.db.svc.eqiad.wmflabs'
+            os.environ['MYSQL_CATALOG'] = db_prefix
 
-    constr = 'mysql+pymysql://{user}:{pwd}@{host}/{catalog}?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
-                                                          pwd=os.environ['MYSQL_PASSWORD'],
-                                                          host=os.environ['MYSQL_HOST'],
-                                                          catalog=os.environ['MYSQL_CATALOG'])
-    print(f'constring is: {constr}')
-    global con
-    con = create_engine(constr, encoding='utf-8')
+        constr = 'mysql+pymysql://{user}:{pwd}@{host}/{catalog}?charset=utf8'.format(user=os.environ['MYSQL_USERNAME'],
+                                                              pwd=os.environ['MYSQL_PASSWORD'],
+                                                              host=os.environ['MYSQL_HOST'],
+                                                              catalog=os.environ['MYSQL_CATALOG'])
+        print(f'constring is: {constr}')
+        global con
+        con = create_engine(constr, encoding='utf-8')
 
-#     con.execute(f'use {db_prefix};')
+    #     con.execute(f'use {db_prefix};')
 
-    thanks_sql = f"""select timestamp,
-            receiver,
-            ru.user_id as receiver_id,
-            sender,
-            su.user_id as sender_id
-    from
-    (select log_timestamp as timestamp, replace(log_title, '_', ' ') as receiver, log_user_text as sender from {db_prefix}.logging where log_type = 'thanks') t
-    left join {db_prefix}.user ru on ru.user_name = t.receiver
-    left join {db_prefix}.user su on su.user_name = t.sender
-    where
-    timestamp < 20180601000000
-    """
+        thanks_sql = f"""select timestamp,
+                receiver,
+                ru.user_id as receiver_id,
+                sender,
+                su.user_id as sender_id
+        from
+        (select log_timestamp as timestamp, replace(log_title, '_', ' ') as receiver, log_user_text as sender from {db_prefix}.logging where log_type = 'thanks') t
+        left join {db_prefix}.user ru on ru.user_name = t.receiver
+        left join {db_prefix}.user su on su.user_name = t.sender
+        where
+        timestamp < 20180601000000
+        """
 
-    love_sql = f"""select wll_timestamp as timestamp,
-    wll_receiver as receiver,
-    wll_receiver as receiver_id,
-    wll_sender as sender,
-    wll_sender as sender_id,
-    wll_type
-    from {db_prefix}.wikilove_log
-    where
-    wll_timestamp < 20180601000000
-    """
+        love_sql = f"""select wll_timestamp as timestamp,
+        wll_receiver as receiver,
+        wll_receiver as receiver_id,
+        wll_sender as sender,
+        wll_sender as sender_id,
+        wll_type
+        from {db_prefix}.wikilove_log
+        where
+        wll_timestamp < 20180601000000
+        """
 
-    which_sql_dict = {'thank':thanks_sql,
-                       'love':love_sql}
+        which_sql_dict = {'thank':thanks_sql,
+                           'love':love_sql}
 
-    which_sql = which_sql_dict[love_thank]
+        which_sql = which_sql_dict[love_thank]
 
-    thank_df = pd.read_sql(which_sql, con)
+        thank_df = pd.read_sql(which_sql, con)
 
 
-    thank_df['receiver'] = thank_df['receiver'].apply(decode_or_nouser)
-    thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
-    thank_df['timestamp'] = thank_df['timestamp'].apply(wmftimestamp)
+        thank_df['receiver'] = thank_df['receiver'].apply(decode_or_nouser)
+        thank_df['sender'] = thank_df['sender'].apply(decode_or_nouser)
+        thank_df['timestamp'] = thank_df['timestamp'].apply(wmftimestamp)
 
-    if love_thank == 'love':
-        thank_df['wll_type'] = thank_df['wll_type'].apply(decode_or_nouser)
+        if love_thank == 'love':
+            thank_df['wll_type'] = thank_df['wll_type'].apply(decode_or_nouser)
 
-    print('#####')
-    print(f'love_thank is {love_thank}')
-    print(thank_df.head())
+        print('#####')
+        print(f'love_thank is {love_thank}')
+        print(thank_df.head())
 
-    ## Shorten the dataframe if we're testing
-    if test_run:
-        thank_df_full = thank_df
-        thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
+        ## Shorten the dataframe if we're testing
+        if test_run:
+            thank_df_full = thank_df
+            thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
 
-    if dump_thank_df:
-        pd.to_pickle('results/thank_df.pickle')
+        if dump_thank_df:
+            pd.to_pickle('results/thank_df.pickle')
+
+    #otherwise we are loading thank df
+    else:
+        assert load_thank_df
+        thank_df = pd.read_pickle(os.path.join(datadir, 'outputs/thank_df.pickle'))
+        if test_run:
+            thank_df = thank_df[:1000]
 
     ## Get changed name ids
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
@@ -456,14 +464,15 @@ if __name__ == '__main__':
     def read_conf(conf):
         print(f'running with conf {conf}')
         configs = json.load(open(os.path.join('configs', f'{conf}.json'),'r'))
+        test_run = False
+        dump_thank_df = False
+        load_thank_df = False
         if 'test_run' in configs.keys():
             test_run = configs['test_run']
-        else:
-            test_run = False
         if 'dump_thank_df' in configs.keys():
             dump_thank_df = configs['dump_thank_df']
-        else:
-            dump_thank_df = False
+        if 'load_thank_df' in configs.keys():
+            load_thank_df = configs['load_thank_df']
 
         for langcode in configs['langcodes']:
             for love_thank in ['thank', 'love']:
@@ -473,7 +482,10 @@ if __name__ == '__main__':
                 outerloopretry = 0
                 while outerloopretry < MAXOUTERLOOPRETRIES:
                     try:
-                        make_lang(langcode, love_thank=love_thank, test_run=test_run, dump_thank_df=dump_thank_df)
+                        make_lang(langcode, love_thank=love_thank,
+                                  test_run=test_run,
+                                  dump_thank_df=dump_thank_df,
+                                  load_thank_df=load_thank_df)
                         break
                     except Exception as e:
                         print(f'outerloopexecption is {e}')
