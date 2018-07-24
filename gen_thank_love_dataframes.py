@@ -62,30 +62,44 @@ def thank_another(user, role, timestamp,  future):
         tc2 = df['timestamp'] <= high_end
         return len(df[(tc1) & (tc2)])
 
+def warm_thankcachemp():
+    users = set()
+    users.update(thank_df['receiver'])
+    users.update(thank_df['sender'])
+    print(f'found {len(users)} users')
+    for role in ['receiver', 'sender']:
+        for user in users:
+            cachekey = f'{user}_{role}'
+            user_cond =  (thank_df[role] == user)
+            df = thank_df[user_cond]
+            thankcachemp[cachekey] = df
+    print(f'len of thankcachemp is {len(thankcachemp)}')
+
 def thank_row(row, first_role, second_role):
     user = row[first_role]
     timestamp = row['timestamp']
     cachekey = f'{user}_{second_role}'
-    if not cachekey in thankcache.keys():
-        user_cond = (thank_df[second_role] == user)
-        df = thank_df[user_cond]
-        thankcachemp[user] = df
-    else:
+    try:
         df = thankcachemp[cachekey]
+    except KeyError:
+        user_cond =  (thank_df[second_role] == user)
+        df = thank_df[user_cond]
+        thankcachemp[cachekey] = df
+        
+    return df[:timestamp].shape[0]
 
-    time_cond = df['timestamp'] < timestamp
-    return len(df[time_cond])
 
 def thank_another_row(row, future):
     user = row['receiver']
     timestamp = row['timestamp']
     cachekey = f'{user}_sender'
-    if not cachekey in thankcachemp.keys():
-        user_cond = (thank_df['sender'] == user)
-        df = thank_df[user_cond]
-        thankcachemp[user] = df
-    else:
+    try:
         df = thankcachemp[cachekey]
+    except KeyError:
+        user_cond =  (thank_df[second_role] == user)
+        df = thank_df[user_cond]
+        thankcachemp[cachekey] = df
+   
     high_end = timestamp + td(days=future)
     tc1 = df['timestamp'] > timestamp
     tc2 = df['timestamp'] <= high_end
@@ -141,24 +155,57 @@ def num_edits_during(userid, timestamp, future=None):
         tc2 = df['rev_timestamp'] <= high_end
         return len(df[(tc1) & (tc2)])
 
+def warm_usercachemp():
+    userids = set()
+    userids.update(thank_df['receiver_id'])
+    userids.update(thank_df['sender_id'])
+    print(f'found {len(userids)} userids')
+    for userid in userids:
+        df, user_exists = load_userid_df(userid)
+        if not user_exists:
+            pass
+        else:
+            usercachemp[userid] = df
+
+
+
 def edits_row(row, role_id):
     '''edits befor timestamp'''
     timestamp = row['timestamp']
     userid = row[role_id]
-    if not userid in usercachemp.keys():
-        df, user_exists = load_userid_df(userid)
-        if not user_exists:
-            return
-        else:
-            usercache[userid] = df
-    else:
-        df = usercache[userid]
-        
+    try:
+        df = usercachemp[userid] 
+    except KeyError:
+        return 0
     time_cond = df['rev_timestamp'] < timestamp
     return len(df[time_cond])
 
-re = partial(edits_row, role_id='receiver_id')
-se = partial(edits_row, role_id='sender_id')
+def edits_after_row(row, role_id, future):
+    '''edits befor timestamp'''
+    timestamp = row['timestamp']
+    userid = row[role_id]
+    try:
+        df = usercachemp[userid] 
+    except KeyError:
+        return 0
+        
+    high_end = timestamp + td(days=future)
+    tc1 = df['rev_timestamp'] > timestamp
+    tc2 = df['rev_timestamp'] <= high_end
+    return len(df[(tc1) & (tc2)])
+
+
+rpe = partial(edits_row, role_id='receiver_id')
+spe = partial(edits_row, role_id='sender_id')
+
+re1 = partial(edits_after_row, role_id='receiver_id', future=1)
+re30 = partial(edits_after_row, role_id='receiver_id', future=30)
+re90 = partial(edits_after_row, role_id='receiver_id', future=90)
+re180 = partial(edits_after_row, role_id='receiver_id', future=180)
+se1 = partial(edits_after_row, role_id='sender_id', future=1)
+se30 = partial(edits_after_row, role_id='sender_id', future=30)
+se90 = partial(edits_after_row, role_id='sender_id', future=90)
+se180 = partial(edits_after_row, role_id='sender_id', future=180)
 
 
 def _apply_df(args):
@@ -311,7 +358,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
         ## Shorten the dataframe if we're testing
         if test_run:
             thank_df_full = thank_df
-            thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
+            thank_df = thank_df_full[:10000] #three forty because that's the min of hte things we're looking at
 
         if dump_thank_df:
             pd.to_pickle('results/thank_df.pickle')
@@ -321,7 +368,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
         assert load_thank_df
         thank_df = pd.read_pickle(os.path.join(datadir, 'outputs/thank_df.pickle'))
         if test_run:
-            thank_df = thank_df[:100]
+            thank_df = thank_df[:10000]
 
     ## Get changed name ids
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
@@ -375,22 +422,23 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
     user_ids.update(thank_df['receiver_id'].values)
     user_ids.update(thank_df['sender_id'].values)
 
-    print(f'we found {len(user_ids)} user ids for which to get history')
-    userhistdir = os.path.join(datadir,'user_histories')
-    os.makedirs(userhistdir, exist_ok=True)
-    print(f'using user history directory {userhistdir}')
-    global userhistlist
-    userhistlist = os.listdir(userhistdir)
+    if not load_thank_df:
+        print(f'we found {len(user_ids)} user ids for which to get history')
+        userhistdir = os.path.join(datadir,'user_histories')
+        os.makedirs(userhistdir, exist_ok=True)
+        print(f'using user history directory {userhistdir}')
+        global userhistlist
+        userhistlist = os.listdir(userhistdir)
 
 
-    #gymnastic to tryin to keep functional with the multiprocessing requiremnet that functions live in root namespace
-    user_ids_withdir = [(u, userhistlist, db_prefix, con) for u in user_ids]
-
-    with Pool(10) as p:
-        res = p.map_async(proc_user, user_ids)
-        res.get()
-
-    print('all done getting user history')
+        #gymnastic to tryin to keep functional with the multiprocessing requiremnet that functions live in root namespace
+        user_ids_withdir = [(u, userhistlist, db_prefix, con) for u in user_ids]
+    
+        with Pool(10) as p:
+            res = p.map_async(proc_user, user_ids)
+            res.get()
+            
+        print('all done getting user history')
 
 
 
@@ -429,82 +477,114 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
             tc2 = df['rev_timestamp'] <= high_end
             return len(df[(tc1) & (tc2)  & (user_cond)])
 
-
+    # Add datetime index
+    print('creating and sorting index')
+    i1 = time.time()
+    thank_df = thank_df.set_index('timestamp')
+    i2 = time.time()
+    thank_df = thank_df.sort_index()
+    i3 = time.time()
+    print(f'make index took: {i2-i1}')
+    print(f'sort index took: {i3-i2}')
+    
 
     # print('computing rpr: a')
     # t1 = time.time()
     # thank_df['receiver_prev_received_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='receiver', timestamp=row[0], future=None), axis=1)
     # t2 = time.time()
-    # print('computing rpr: b')
-    # thank_df['receiver_prev_received_mp_old'] = apply_mp(thank_df, rpr_mp_old, axis=1)
-    #  t3 = time.time()
-    # print('computing rpr: c')
-    #  thank_df['receiver_prev_received'] = apply_mp(thank_df, rpr, axis=1)
-    #  t4 = time.time()
-    # # print(f'way a took: {t2-t1}')
-    # # print(f'way b took: {t3-t2}')
-    # print(f'way c took: {t4-t3}')
-    # # compac = thank_df['receiver_prev_received']==thank_df['receiver_prev_received_slow']
-    # # if not all(compac):
-    # #     print(f"not the same")
-    # # else:
-    # #     print('result were the same')
+    t3 = time.time()
+    print('computing rpr: c')
+    thank_df['receiver_prev_received'] = apply_mp(thank_df, rpr, axis=1)
+    t4 = time.time()
+    # print(f'way a took: {t2-t1}')
 
-    # print('computing rps')
-    # # thank_df['receiver_prev_sent_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=None), axis=1)
-    #  thank_df['receiver_prev_sent'] = apply_mp(thank_df, rps, axis=1)
-    # # if not all(thank_df['receiver_prev_sent_slow']==thank_df['receiver_prev_sent']):
-    # #     print('rps error')
+    print(f'way c took: {t4-t3}')
+    # compac = thank_df['receiver_prev_received']==thank_df['receiver_prev_received_slow']
+    # if not all(compac):
+    #     print(f"not the same")
+    # else:
+    #     print('result were the same')
 
-    # print('computing spr')
-    # # thank_df['sender_prev_received_slow'] = thank_df.apply(lambda row: thank_another(user=row[3], role='receiver', timestamp=row[0], future=None), axis=1)
-    # thank_df['sender_prev_received'] = apply_mp(thank_df, spr, axis=1)
+    print('computing rps')
+    # thank_df['receiver_prev_sent_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=None), axis=1)
+    thank_df['receiver_prev_sent'] = apply_mp(thank_df, rps, axis=1)
+    # if not all(thank_df['receiver_prev_sent_slow']==thank_df['receiver_prev_sent']):
+    #     print('rps error')
 
-    # print('computing sps')
-    # # thank_df['sender_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[3], role='sender', timestamp=row[0], future=None), axis=1)
-    # thank_df['sender_prev_sps'] = apply_mp(thank_df, sps, axis=1)
+    print('computing spr')
+    # thank_df['sender_prev_received_slow'] = thank_df.apply(lambda row: thank_another(user=row[3], role='receiver', timestamp=row[0], future=None), axis=1)
+    thank_df['sender_prev_received'] = apply_mp(thank_df, spr, axis=1)
+
+    print('computing sps')
+    # thank_df['sender_prev_sent'] = thank_df.apply(lambda row: thank_another(user=row[3], role='sender', timestamp=row[0], future=None), axis=1)
+    thank_df['sender_prev_sent'] = apply_mp(thank_df, sps, axis=1)
 
 
-    # print('computing indicators')
-    # conticols = ["receiver_prev_received","sender_prev_received","sender_prev_sent","receiver_prev_sent"]
-    # for col in conticols:
-    #     indcol = "{col}_indicator".format(col=col)
-    #     thank_df[indcol] = thank_df[col].apply(lambda x: x>0)
+    print('computing indicators')
+    conticols = ["receiver_prev_received","sender_prev_received","sender_prev_sent","receiver_prev_sent"]
+    for col in conticols:
+        indcol = "{col}_indicator".format(col=col)
+        thank_df[indcol] = thank_df[col].apply(lambda x: x>0)
 
     print('computing rpe')
-    t5 = time.time()
-    thank_df['receiver_prev_edits_slow'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1)
+    # t5 = time.time()
+    # thank_df['receiver_prev_edits_slow'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1) 
     t6 = time.time()
-    thank_df['receiver_prev_edits'] = apply_mp(thank_df, re, axis=1)
+    thank_df['receiver_prev_edits'] = apply_mp(thank_df, rpe, axis=1)
     t7 = time.time()
-    if not all(thank_df['receiver_prev_edits_slow']==thank_df['receiver_prev_edits']):
-        print(thank_df[thank_df['receiver_prev_edits_slow']!=thank_df['receiver_prev_edits']][['receiver_prev_edits_slow','receiver_prev_edits']])
-    print(f'rpe slow: {t6-t5}')
+    # if not all(thank_df['receiver_prev_edits_slow']==thank_df['receiver_prev_edits']):
+    #     print(thank_df[thank_df['receiver_prev_edits_slow']!=thank_df['receiver_prev_edits']][['receiver_prev_edits_slow','receiver_prev_edits']])
+    # print(f'rpe slow: {t6-t5}')
     print(f'rpe fast: {t7-t6}')
 
     print('computing spe')
-    thank_df['sender_prev_edits'] = thank_df.apply(lambda row: num_prev_edits(userid=row[4], prior_to=row[0]), axis=1)
+    # thank_df['sender_prev_edits_slow'] = thank_df.apply(lambda row: num_prev_edits(userid=row[4], prior_to=row[0]), axis=1)
+    thank_df['sender_prev_edits'] = apply_mp(thank_df, spe, axis=1)
 
-    # print('computing first edits')
-    # thank_df['sender_first_edit'] = thank_df['sender_id'].apply(first_edit)
-    # thank_df['receiver_first_edit'] = thank_df['receiver_id'].apply(first_edit)
+    print('computing first edits')
+    thank_df['sender_first_edit'] = thank_df['sender_id'].apply(first_edit)
+    thank_df['receiver_first_edit'] = thank_df['receiver_id'].apply(first_edit)
 
-    # print('computing se1d')
-    # thank_df['sender_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
+    print('computing se1d')
+    # t8 = time.time()
+    # thank_df['sender_edits_1d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
+    t9 = time.time()
+    thank_df['sender_edits_1d_after'] = apply_mp(thank_df, se1, axis=1)
+    t10 = time.time()
+    # if not all(thank_df['sender_edits_1d_after_slow']==thank_df['sender_edits_1d_after']):
+    #     print(thank_df[thank_df['sender_edits_1d_after_slow']!=thank_df['sender_edits_1d_after']][['sender_edits_1d_after_slow','sender_edits_1d_after']])
+    # print(f'rpe slow: {t9-t8}')
+    print(f'se1 fast: {t10-t9}')
+    
     # print('computing se30d')
-    # thank_df['sender_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=30), axis=1)
+    # thank_df['sender_edits_30d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=30), axis=1)
     # print('computing se90d')
-    # thank_df['sender_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=90), axis=1)
+    # thank_df['sender_edits_90d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=90), axis=1)
     # print('computing se180d')
-    # thank_df['sender_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=180), axis=1)
+    # thank_df['sender_edits_180d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=180), axis=1)
     # print('computing re1d')
-    # thank_df['receiver_edits_1d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=1), axis=1)
+    # thank_df['receiver_edits_1d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=1), axis=1)
     # print('computing re30d')
-    # thank_df['receiver_edits_30d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=30), axis=1)
+    # thank_df['receiver_edits_30d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=30), axis=1)
     # print('computing re90d')
-    # thank_df['receiver_edits_90d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=90), axis=1)
+    # thank_df['receiver_edits_90d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=90), axis=1)
     # print('computing re180d')
-    # thank_df['receiver_edits_180d_after'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=180), axis=1)
+    # thank_df['receiver_edits_180d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[2], timestamp=row[0], future=180), axis=1)
+
+    print('computing se30d')
+    thank_df['sender_edits_30d_after'] = apply_mp(thank_df, se30, axis=1)
+    print('computing se90d')
+    thank_df['sender_edits_90d_after'] = apply_mp(thank_df, se90, axis=1)
+    print('computing se180d')
+    thank_df['sender_edits_180d_after'] = apply_mp(thank_df, se180, axis=1)
+    print('computing re1d')
+    thank_df['receiver_edits_1d_after'] = apply_mp(thank_df, re1, axis=1)
+    print('computing re30d')
+    thank_df['receiver_edits_30d_after'] = apply_mp(thank_df, re30, axis=1)
+    print('computing re90d')
+    thank_df['receiver_edits_90d_after'] = apply_mp(thank_df, re90, axis=1)
+    print('computing re180d')
+    thank_df['receiver_edits_180d_after'] = apply_mp(thank_df, re180, axis=1)
 
     print('computing rta1d')
     # thank_df['receiver_thank_another_1d_after_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=1), axis=1)
