@@ -86,7 +86,7 @@ def thank_row(row, first_role, second_role):
         df = thank_df[user_cond]
         thankcachemp[cachekey] = df
         
-    return df[:timestamp].shape[0]
+    return df[:timestamp].shape[0] -1 #minus one because we want exclusive range
 
 
 def thank_another_row(row, future):
@@ -96,14 +96,12 @@ def thank_another_row(row, future):
     try:
         df = thankcachemp[cachekey]
     except KeyError:
-        user_cond =  (thank_df[second_role] == user)
+        user_cond =  (thank_df['sender'] == user)
         df = thank_df[user_cond]
         thankcachemp[cachekey] = df
-   
+
     high_end = timestamp + td(days=future)
-    tc1 = df['timestamp'] > timestamp
-    tc2 = df['timestamp'] <= high_end
-    return len(df[(tc1) & (tc2)])
+    return df[timestamp:high_end].shape[0] -1 #minus one because
 
 
 rpr = partial(thank_row, first_role='receiver', second_role='receiver')
@@ -121,7 +119,7 @@ missing_users = set()
 def load_userid_df(userid):
     '''returns none if userid is not found'''
     try:
-        pickle_loc = os.path.join(datadir, 'user_histories', '{}.pickle'.format(userid))
+        pickle_loc = os.path.join(datadir, 'user_histories', '{}.pickle.index'.format(userid))
         df = pd.read_pickle(pickle_loc)
         return df, True
     except FileNotFoundError:
@@ -167,33 +165,36 @@ def warm_usercachemp():
         else:
             usercachemp[userid] = df
 
-
-
 def edits_row(row, role_id):
     '''edits befor timestamp'''
     timestamp = row['timestamp']
     userid = row[role_id]
-    try:
+    if userid in usercachemp:
         df = usercachemp[userid] 
-    except KeyError:
-        return 0
-    time_cond = df['rev_timestamp'] < timestamp
-    return len(df[time_cond])
+    else:
+        df, user_exists = load_userid_df(userid)
+        if not user_exists:
+            pass
+        else:
+            usercachemp[userid] = df
+
+    return df[:timestamp].shape[0] -1 #exclusive
 
 def edits_after_row(row, role_id, future):
     '''edits befor timestamp'''
     timestamp = row['timestamp']
     userid = row[role_id]
-    try:
+    if userid in usercachemp:
         df = usercachemp[userid] 
-    except KeyError:
-        return 0
+    else:
+        df, user_exists = load_userid_df(userid)
+        if not user_exists:
+            pass
+        else:
+            usercachemp[userid] = df
         
     high_end = timestamp + td(days=future)
-    tc1 = df['rev_timestamp'] > timestamp
-    tc2 = df['rev_timestamp'] <= high_end
-    return len(df[(tc1) & (tc2)])
-
+    return df[timestamp:high_end].shape[0] -1 #exclisve
 
 rpe = partial(edits_row, role_id='receiver_id')
 spe = partial(edits_row, role_id='sender_id')
@@ -358,7 +359,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
         ## Shorten the dataframe if we're testing
         if test_run:
             thank_df_full = thank_df
-            thank_df = thank_df_full[:10000] #three forty because that's the min of hte things we're looking at
+            thank_df = thank_df_full[:100] #three forty because that's the min of hte things we're looking at
 
         if dump_thank_df:
             pd.to_pickle('results/thank_df.pickle')
@@ -368,7 +369,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
         assert load_thank_df
         thank_df = pd.read_pickle(os.path.join(datadir, 'outputs/thank_df.pickle'))
         if test_run:
-            thank_df = thank_df[:10000]
+            thank_df = thank_df[:100]
 
     ## Get changed name ids
     receiver_noid = thank_df[pd.isnull(thank_df['receiver_id'])]['receiver'].unique()
@@ -449,7 +450,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
             if not user_exists:
                 return float('nan')
             else:
-                mindate = df['rev_timestamp'].min()
+                mindate = df.index.min()
                 firsteditcache[userid] = mindate
                 return mindate
         else:
@@ -480,17 +481,15 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
     # Add datetime index
     print('creating and sorting index')
     i1 = time.time()
-    thank_df = thank_df.set_index('timestamp')
+    thank_df = thank_df.set_index('timestamp', drop=False)
     i2 = time.time()
     thank_df = thank_df.sort_index()
     i3 = time.time()
     print(f'make index took: {i2-i1}')
     print(f'sort index took: {i3-i2}')
-    
 
-    # print('computing rpr: a')
     # t1 = time.time()
-    # thank_df['receiver_prev_received_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='receiver', timestamp=row[0], future=None), axis=1)
+    thank_df['receiver_prev_received_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='receiver', timestamp=row[0], future=None), axis=1)
     # t2 = time.time()
     t3 = time.time()
     print('computing rpr: c')
@@ -499,11 +498,12 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
     # print(f'way a took: {t2-t1}')
 
     print(f'way c took: {t4-t3}')
-    # compac = thank_df['receiver_prev_received']==thank_df['receiver_prev_received_slow']
-    # if not all(compac):
-    #     print(f"not the same")
-    # else:
-    #     print('result were the same')
+    compac = thank_df['receiver_prev_received']!=thank_df['receiver_prev_received_slow']
+    if any(compac):
+        print(f"not the same")
+        print(thank_df[compac][['receiver_prev_received', 'receiver_prev_received_slow']].head().to_string())
+    else:
+        print('the same')
 
     print('computing rps')
     # thank_df['receiver_prev_sent_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=None), axis=1)
@@ -533,7 +533,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
     thank_df['receiver_prev_edits'] = apply_mp(thank_df, rpe, axis=1)
     t7 = time.time()
     # if not all(thank_df['receiver_prev_edits_slow']==thank_df['receiver_prev_edits']):
-    #     print(thank_df[thank_df['receiver_prev_edits_slow']!=thank_df['receiver_prev_edits']][['receiver_prev_edits_slow','receiver_prev_edits']])
+    #    print(thank_df[thank_df['receiver_prev_edits_slow']!=thank_df['receiver_prev_edits']][['receiver_prev_edits_slow','receiver_prev_edits']])
     # print(f'rpe slow: {t6-t5}')
     print(f'rpe fast: {t7-t6}')
 
@@ -547,12 +547,12 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
 
     print('computing se1d')
     # t8 = time.time()
-    # thank_df['sender_edits_1d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
+    # thank_df['sender_# edits_1d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=1), axis=1)
     t9 = time.time()
     thank_df['sender_edits_1d_after'] = apply_mp(thank_df, se1, axis=1)
     t10 = time.time()
     # if not all(thank_df['sender_edits_1d_after_slow']==thank_df['sender_edits_1d_after']):
-    #     print(thank_df[thank_df['sender_edits_1d_after_slow']!=thank_df['sender_edits_1d_after']][['sender_edits_1d_after_slow','sender_edits_1d_after']])
+    #    print(thank_df[thank_df['sender_edits_1d_after_slow']!=thank_df['sender_edits_1d_after']][['sender_edits_1d_after_slow','sender_edits_1d_after']])
     # print(f'rpe slow: {t9-t8}')
     print(f'se1 fast: {t10-t9}')
     
@@ -680,7 +680,7 @@ if __name__ == '__main__':
             for love_thank in ['thank', 'love']:
                 print(f'Now kicking off for: {langcode}. \n Love or thank? {love_thank}. \n Test run?: {test_run}')
                 print('################')
-                MAXOUTERLOOPRETRIES = 2
+                MAXOUTERLOOPRETRIES = 1
                 outerloopretry = 0
                 while outerloopretry < MAXOUTERLOOPRETRIES:
                     try:
@@ -690,6 +690,7 @@ if __name__ == '__main__':
                                   load_thank_df=load_thank_df)
                         break
                     except Exception as e:
+                        raise
                         print(f'outerloopexecption is {e}')
                         print(f'retry number {outerloopretry}')
                         outerloopretry += 1
