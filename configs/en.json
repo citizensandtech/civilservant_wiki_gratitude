@@ -2,4 +2,4 @@
  ["en"],
 "dump_thank_df":false,
 "load_thank_df":true,
-"test_run":true}
+"test_run":false}
