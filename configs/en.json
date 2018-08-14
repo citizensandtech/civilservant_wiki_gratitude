@@ -1,2 +1,5 @@
 {"langcodes":
- ["ar",  "es", "fa", "he", "hu", "pt", "sv", "tr"]}
+ ["en"],
+"dump_thank_df":false,
+"load_thank_df":true,
+"test_run":false}
