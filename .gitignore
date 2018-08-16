@@ -8,3 +8,7 @@ results/
 \.idea/
 
 venv/
+
+transfer/
+
+\.Rhistory
