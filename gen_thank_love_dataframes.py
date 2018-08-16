@@ -52,7 +52,7 @@ def thank_another(user, role, timestamp,  future):
         thankcache[user] = df
     else:
         df = thankcache[cachekey]
-        
+
     if not future:
         time_cond = df['timestamp'] < timestamp
         return len(df[time_cond])
@@ -85,7 +85,7 @@ def thank_row(row, first_role, second_role):
         user_cond =  (thank_df[second_role] == user)
         df = thank_df[user_cond]
         thankcachemp[cachekey] = df
-        
+
     return df[:timestamp].shape[0] -1 #minus one because we want exclusive range
 
 
@@ -143,7 +143,7 @@ def num_edits_during(userid, timestamp, future=None):
             usercache[userid] = df
     else:
         df = usercache[userid]
-        
+
     if not future:
         time_cond = df['rev_timestamp'] < timestamp
         return len(df[time_cond])
@@ -164,7 +164,7 @@ def edits_row(row, role_id):
     timestamp = row['timestamp']
     userid = row[role_id]
     try:
-        df = usercachemp[userid] 
+        df = usercachemp[userid]
     except KeyError:
         df, user_exists = load_userid_df(userid)
         usercachemp[userid] = df
@@ -176,11 +176,11 @@ def edits_after_row(row, role_id, future):
     timestamp = row['timestamp']
     userid = row[role_id]
     try:
-        df = usercachemp[userid] 
+        df = usercachemp[userid]
     except KeyError:
         df, user_exists = load_userid_df(userid)
         usercachemp[userid] = df
-        
+
     high_end = timestamp + td(days=future)
     return df[timestamp:high_end].shape[0] -1 #exclisve
 
@@ -393,7 +393,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
                 user_id = get_id(newname)
                 print(f'going to replace {newname} with {user_id}')
                 thank_df.loc[thank_df[direction] == oldname, f'{direction}_id'] = user_id
-                
+
 
         ## cast everything back to ints
         thank_df['receiver_id'] = thank_df['receiver_id'].fillna(-1).astype(int)
@@ -409,31 +409,29 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
         print(f'using user history directory {userhistdir}')
         global userhistlist
         userhistlist = os.listdir(userhistdir)
-        
 
-        
+
+
         #gymnastic to tryin to keep functional with the multiprocessing requiremnet that functions live in root namespace
         # user_ids_withdir = [(u, userhistlist, db_prefix, con) for u in user_ids]
-        
+
         with Pool(10) as p:
             res = p.map_async(proc_user, user_ids)
             res.get()
-            
+
         print('all done getting user history')
-            
-            
 
-    if dump_thank_df:
-        thank_df.to_pickle('data/en/outputs/thank_df.pickle')
-    else:
-        pass
 
-    #otherwise we are loading thank df
+    # otherwise we are loading thank df
     else:
         assert load_thank_df
         thank_df = pd.read_pickle(os.path.join(datadir, 'outputs/thank_df.pickle'))
         if test_run:
             thank_df = thank_df[:test_run]
+
+    if dump_thank_df:
+        thank_df.to_pickle('data/en/outputs/thank_df.pickle')
+
 
 
     firsteditcache = {}
@@ -503,7 +501,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
 
     print('computing rpe')
     # t5 = time.time()
-    # thank_df['receiver_prev_edits_slow'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1) 
+    # thank_df['receiver_prev_edits_slow'] = thank_df.apply(lambda row: num_prev_edits(userid=row[2], prior_to=row[0]), axis=1)
     t6 = time.time()
     thank_df['receiver_prev_edits'] = apply_mp(thank_df, rpe, max_workers, axis=1)
     t7 = time.time()
@@ -530,7 +528,7 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
     #    print(thank_df[thank_df['sender_edits_1d_after_slow']!=thank_df['sender_edits_1d_after']][['sender_edits_1d_after_slow','sender_edits_1d_after']])
     # print(f'rpe slow: {t9-t8}')
     print(f'se1 fast: {t10-t9}')
-    
+
     # print('computing se30d')
     # thank_df['sender_edits_30d_after_slow'] = thank_df.apply(lambda row: num_edits_during(userid=row[4], timestamp=row[0], future=30), axis=1)
     # print('computing se90d')
@@ -613,8 +611,8 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
     # thank_df['receiver_thank_another_90d_after_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=90), axis=1)
     thank_df['receiver_thank_another_90d_after'] =  apply_mp(thank_df, rta90, axis=1)
 
-    print('computing rta180d') 
-    # thank_df['receiver_thank_another_180d_after_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=180), axis=1) 
+    print('computing rta180d')
+    # thank_df['receiver_thank_another_180d_after_slow'] = thank_df.apply(lambda row: thank_another(user=row[1], role='sender', timestamp=row[0], future=180), axis=1)
     thank_df['receiver_thank_another_180d_after'] =  apply_mp(thank_df, rta180, axis=1)
 
 
@@ -622,8 +620,8 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
     # assert all(thank_df['receiver_thank_another_1d_after_slow']==thank_df['receiver_thank_another_1d_after'])
     # assert all(thank_df['receiver_thank_another_30d_after_slow']==thank_df['receiver_thank_another_30d_after'])
 
-    
-    
+
+
 
     # TESTS
 
@@ -682,6 +680,7 @@ if __name__ == '__main__':
               help='the json file to look for in configs without `.json`')
     def read_conf(conf):
         print(f'running with conf {conf}')
+        print(f'cwd is: {os.getcwd()}')
         configs = json.load(open(os.path.join('configs', f'{conf}.json'),'r'))
         test_run = False
         dump_thank_df = False
