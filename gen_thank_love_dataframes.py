@@ -216,7 +216,7 @@ def proc_user(user_id):
     # check that a user id was able to be found
     if user_id >= 0:
     #     print('working on {}'.format(user))
-        pickle_filename = '{}.pickle'.format(user_id)
+        pickle_filename = '{}.pickle.index'.format(user_id)
         if not pickle_filename in userhistlist:
             sql = f'''
             select rev_timestamp from {db_prefix}.revision_userindex r
@@ -424,7 +424,9 @@ def make_lang(langcode, love_thank, test_run=False, dump_thank_df=False, load_th
             
 
     if dump_thank_df:
-        pd.to_pickle('outputs/thank_df.pickle')
+        thank_df.to_pickle('data/en/outputs/thank_df.pickle')
+    else:
+        pass
 
     #otherwise we are loading thank df
     else:
@@ -684,15 +686,20 @@ if __name__ == '__main__':
         test_run = False
         dump_thank_df = False
         load_thank_df = False
+        just_love = False
         if 'test_run' in configs.keys():
             test_run = configs['test_run']
         if 'dump_thank_df' in configs.keys():
             dump_thank_df = configs['dump_thank_df']
         if 'load_thank_df' in configs.keys():
             load_thank_df = configs['load_thank_df']
+        if 'just_love' in configs.keys():
+            just_love = configs['just_love']
 
         for langcode in configs['langcodes']:
             for love_thank in ['thank', 'love']:
+                if love_thank == 'thank' and just_love is True:
+                    continue
                 print(f'Now kicking off for: {langcode}. \n Love or thank? {love_thank}. \n Test run?: {test_run}')
                 print('################')
                 MAXOUTERLOOPRETRIES = 1
